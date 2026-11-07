@@ -1,0 +1,60 @@
+name: Deploy Issue Agent Bridge
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Publish Docker image"]
+    types: [completed]
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-agent-bridge-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Copy Compose definition to Docker host
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          fingerprint: ${{ secrets.DEPLOY_SSH_FINGERPRINT }}
+          source: "compose.deploy.yaml"
+          target: "~/issue-agent-bridge"
+          overwrite: true
+
+      - name: Deploy containers
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GITHUB_WEBHOOK_SECRET: ${{ secrets.ISSUE_AGENT_BRIDGE_WEBHOOK_SECRET }}
+          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+          ALLOWED_REPOS: ${{ vars.ALLOWED_REPOS }}
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}:develop
+        with:
+          host: ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          fingerprint: ${{ secrets.DEPLOY_SSH_FINGERPRINT }}
+          envs: GITHUB_WEBHOOK_SECRET,CLOUDFLARE_TUNNEL_TOKEN,ALLOWED_REPOS,GHCR_IMAGE
+          script_stop: true
+          script: |
+            set -eu
+            test -n "$GITHUB_WEBHOOK_SECRET"
+            test -n "$CLOUDFLARE_TUNNEL_TOKEN"
+            test -n "$ALLOWED_REPOS"
+            cd "$HOME/issue-agent-bridge"
+            export GITHUB_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN ALLOWED_REPOS
+            docker compose -f compose.deploy.yaml pull
+            docker compose -f compose.deploy.yaml up -d --remove-orphans
+            unset GITHUB_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN ALLOWED_REPOS
