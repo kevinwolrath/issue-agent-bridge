@@ -1,0 +1,7 @@
+.env
+*.db
+*.db-*
+*.exe
+/bridge
+/coverage.out
+/tmp/
