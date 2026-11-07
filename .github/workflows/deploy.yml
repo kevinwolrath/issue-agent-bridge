@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: issue-agent-bridge-deploy
@@ -17,44 +18,34 @@ concurrency:
 jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows]
     steps:
       - uses: actions/checkout@v4
         with:
           ref: develop
 
-      - name: Copy Compose definition to Docker host
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_SSH_HOST }}
-          username: ${{ secrets.DEPLOY_SSH_USER }}
-          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          fingerprint: ${{ secrets.DEPLOY_SSH_FINGERPRINT }}
-          source: "compose.deploy.yaml"
-          target: "~/issue-agent-bridge"
-          overwrite: true
-
-      - name: Deploy containers
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Deploy containers locally on Windows Docker host
+        shell: pwsh
         env:
           GITHUB_WEBHOOK_SECRET: ${{ secrets.ISSUE_AGENT_BRIDGE_WEBHOOK_SECRET }}
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           ALLOWED_REPOS: ${{ vars.ALLOWED_REPOS }}
-          GHCR_IMAGE: ghcr.io/${{ github.repository }}:develop
-        with:
-          host: ${{ secrets.DEPLOY_SSH_HOST }}
-          username: ${{ secrets.DEPLOY_SSH_USER }}
-          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          fingerprint: ${{ secrets.DEPLOY_SSH_FINGERPRINT }}
-          envs: GITHUB_WEBHOOK_SECRET,CLOUDFLARE_TUNNEL_TOKEN,ALLOWED_REPOS,GHCR_IMAGE
-          script_stop: true
-          script: |
-            set -eu
-            test -n "$GITHUB_WEBHOOK_SECRET"
-            test -n "$CLOUDFLARE_TUNNEL_TOKEN"
-            test -n "$ALLOWED_REPOS"
-            cd "$HOME/issue-agent-bridge"
-            export GITHUB_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN ALLOWED_REPOS
-            docker compose -f compose.deploy.yaml pull
-            docker compose -f compose.deploy.yaml up -d --remove-orphans
-            unset GITHUB_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN ALLOWED_REPOS
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('GITHUB_WEBHOOK_SECRET', 'CLOUDFLARE_TUNNEL_TOKEN', 'ALLOWED_REPOS')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing required GitHub secret or variable: $name"
+            }
+          }
+          docker info --format '{{.OSType}}' | ForEach-Object {
+            if ($_ -ne 'linux') { throw 'Docker must be running Linux containers.' }
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Docker daemon is unavailable.' }
+          docker compose -f compose.deploy.yaml config --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid Compose configuration.' }
+          docker compose -f compose.deploy.yaml pull
+          if ($LASTEXITCODE -ne 0) { throw 'Docker image pull failed.' }
+          docker compose -f compose.deploy.yaml up -d --remove-orphans
+          if ($LASTEXITCODE -ne 0) { throw 'Docker deployment failed.' }
+          docker compose -f compose.deploy.yaml ps
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect deployed containers.' }
