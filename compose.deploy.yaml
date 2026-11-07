@@ -1,5 +1,7 @@
-# Deployment uses prebuilt GHCR images; no source checkout or host-native app.
-# Start only after setting secrets in a private .env file on the Docker host.
+# Runs prebuilt images only. Credentials are injected by the deployment workflow;
+# no .env file or persistent credential file is required on the Docker host.
+name: issue-agent-bridge
+
 services:
   bridge:
     image: ghcr.io/kevinwolrath/issue-agent-bridge:${BRIDGE_IMAGE_TAG:-develop}
@@ -9,9 +11,9 @@ services:
       HTTP_ADDR: ":8080"
       DATABASE_PATH: /data/bridge.db
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?Required}
-      GITHUB_ALLOWED_REPOS: ${GITHUB_ALLOWED_REPOS:?Required}
-      GITHUB_READY_LABEL: ${GITHUB_READY_LABEL:-agent:ready}
-      WORKER_ENABLED: ${WORKER_ENABLED:-false}
+      GITHUB_ALLOWED_REPOS: ${ALLOWED_REPOS:?Required}
+      GITHUB_READY_LABEL: agent:ready
+      WORKER_ENABLED: "false"
     volumes:
       - bridge-data:/data
     read_only: true
